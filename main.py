@@ -1,110 +1,167 @@
 import asyncio
 import os
-import json
-from droidrun import DroidAgent, AdbTools
+import time
+import config
+import utils
+from droidrun import AdbTools
 from llama_index.llms.ollama import Ollama
 
-# Keys setup
+# Fake Keys
 os.environ["GOOGLE_API_KEY"] = "fake"
 os.environ["OPENAI_API_KEY"] = "fake"
 
-# --- HELPER: Recursively find all text in JSON ---
-def extract_all_text(data):
-    texts = []
-    if isinstance(data, dict):
-        for key, value in data.items():
-            # Agar key 'text', 'content_desc', ya 'resource_id' hai to value le lo
-            if key in ["text", "content_description", "text_content"] and value:
-                texts.append(str(value))
-            else:
-                texts.extend(extract_all_text(value))
-    elif isinstance(data, list) or isinstance(data, tuple):
-        for item in data:
-            texts.extend(extract_all_text(item))
-    return texts
+# --- STATE ---
+app_history = {} 
+current_app_start_time = 0
+last_package = ""
 
-
-import re
-
-def clean_noise(text_list):
-    clean_items = []
-    
-    for item in text_list:
-        item = str(item).strip()
-        
-        # 1. Skip empty strings
-        if not item: continue
-        
-        # 2. THE BIG FIX: Remove anything starting with "com." or "android."
-        # This kills 90% of the noise instantly.
-        if item.startswith("com.") or item.startswith("android."):
-            continue
-            
-        # 3. Skip numbers/stats (optional, but "4628 likes" doesn't prove doomscrolling)
-        # If it's just a number like "10" or "@2131977409", skip it
-        # if item.isdigit() or item.startswith("@"):
-        #     continue
-
-        # 4. Filter generic UI words that appear everywhere
-        # if item in ["More", "Back", "Close", "Share", "Like", "Comment", "Send", "Double tap to play or pause."]:
-        #     continue
-
-        # 5. Deduplicate consecutive items
-        if clean_items and clean_items[-1] == item:
-            continue
-            
-        clean_items.append(item)
-        
-    return " | ".join(clean_items)
+# --- LANDSCAPE STATE ---
+was_landscape = False
+landscape_checked = False # Ensures we only tap once per session
 
 async def main():
-    print("🚀 Initializing...")
+    global app_history, current_app_start_time, last_package 
+    global was_landscape, landscape_checked
+    
+    print(f"🔥 TAP & SNAP ENFORCER | Persona: {config.USER_PERSONA}")
+    print("------------------------------------------------")
 
-    # 1. SETUP LOCAL OLLAMA
-    qwen_llm = Ollama(
-        model="qwen2.5", 
-        request_timeout=120.0,
-        base_url="http://localhost:11434"
-    )
+    qwen_llm = Ollama(model="qwen2.5", request_timeout=30.0, base_url="http://localhost:11434")
+    tools = AdbTools()
 
-    # 2. SETUP TOOLS
-    tools_obj = AdbTools()
+    while True:
+        try:
+            # 1. GET DATA
+            raw_state = await tools.get_state()
+            package, app_name = utils.get_app_info(raw_state)
+            
+            # --- A. WHITELIST ---
+            if package in config.WHITELIST_APPS or "launcher" in package:
+                if last_package and last_package not in config.WHITELIST_APPS:
+                    app_history[last_package] = time.time()
+                last_package = package
+                was_landscape = False # Reset landscape memory
+                landscape_checked = False
+                await asyncio.sleep(5)
+                continue
 
-    # 3. SETUP AGENT
-    agent = DroidAgent(
-        goal="Check for doomscrolling",
-        tools=tools_obj,
-        llms=qwen_llm
-    )
+            # --- B. GRACE PERIOD ---
+            if package != last_package:
+                print(f"👉 Opened: {app_name}")
+                landscape_checked = False # Reset checking logic
+                last_closed = app_history.get(package, 0)
+                if (time.time() - last_closed) < config.REOPEN_PENALTY_TIME:
+                    print(f"🚫 ANTI-CHEAT: Instant Check.")
+                    current_app_start_time = 0 
+                else:
+                    current_app_start_time = time.time()
+                last_package = package
 
-    print("👀 Reading FULL screen state...")
-    
-    # 4. GET RAW STATE
-    raw_state = await tools_obj.get_state()
-    
-    # --- THE FIX: EXTRACT EVERYTHING ---
-    # Tuple ho ya Dict, hum sab kuch pass karenge extractor ko
-    all_text_list = extract_all_text(raw_state)
-    
-    # Join list into a single clean string
-    clean_text = clean_noise(all_text_list)
-    
-    # 3. Save & Print
-    with open("screen_dump.txt", "w", encoding="utf-8") as f:
-        f.write(clean_text)
-    
-    
-    # 5. ASK QWEN
-    print("🤖 Analyzing...")
-    prompt = (
-        "Analyze this Android screen text. Does it contain keywords like 'Reels', 'Shorts', 'TikTok', "
-        "or is the user watching a short video loop? "
-        "Reply exactly with YES or NO.\n\n"
-        f"Screen Text: {clean_text}"
-    )
-    
-    response = await qwen_llm.acomplete(prompt)
-    print(f"💡 Verdict: {response.text}")
+            if (time.time() - current_app_start_time) < config.GRACE_PERIOD:
+                await asyncio.sleep(5)
+                continue
+
+            # 2. EXTRACTION
+            text_list = utils.extract_all_text(raw_state)
+            is_currently_landscape = utils.is_landscape(raw_state)
+
+            # 3. TECHNICAL CHECKS
+            if "instagram" in package and not utils.is_insta_safe(text_list):
+                print("🚨 RULE BROKEN: Insta Feed/Reels.")
+                await punish(tools)
+                continue
+
+            if "youtube" in package:
+                safe, reason, is_shorts = utils.is_youtube_safe(text_list, state=raw_state)
+                if is_shorts:
+                    print(f"🚨 Shorts Detected: {reason}")
+                    await punish(tools)
+                    continue
+
+                # 4. LANDSCAPE TAP & SNAP LOGIC
+                if config.STUDY_MODE:
+                    
+                    content_to_analyze = ""
+                    source = ""
+
+                    # CASE A: Just entered Landscape (or need to re-check)
+                    if is_currently_landscape and not landscape_checked:
+                        print("👀 Landscape Detected. Tapping to reveal title...")
+                        
+                        # TAP THE SCREEN (Center-ish coordinates)
+                        # Assuming 1080x2400 resolution roughly. 
+                        # In landscape, center is approx X=1200, Y=500
+                        await tools.swipe(1200, 500, 1200, 500, 50) 
+                        
+                        # WAIT for UI to fade in
+                        await asyncio.sleep(1.5) 
+                        
+                        # RE-CAPTURE STATE (Now with title visible)
+                        new_state = await tools.get_state()
+                        new_text_list = utils.extract_all_text(new_state)
+                        
+                        # CLEAN DATA
+                        cleaned_text = utils.clean_for_llm(new_text_list)
+                        content_to_analyze = cleaned_text
+                        source = "Landscape Tap"
+                        landscape_checked = True # Mark done so we don't tap again
+                        
+                    # CASE B: Portrait Mode (Text is always visible)
+                    elif not is_currently_landscape:
+                        content_to_analyze = utils.clean_for_llm(text_list)
+                        source = "Portrait Mode"
+                        landscape_checked = False # Reset if we go back to portrait
+                    
+                    # CASE C: Already checked Landscape
+                    else:
+                        # We are in landscape, and we already checked it.
+                        # Do nothing to save battery/annoyance.
+                        await asyncio.sleep(5)
+                        continue
+
+                    # --- VERDICT PHASE ---
+                    # If we have content (from Tap or Portrait), verify it
+                    if len(content_to_analyze) < 10:
+                        print("⚠️ No readable text found. Skipping.")
+                        continue
+
+                    # Log what we are sending
+                    try:
+                        with open("llm_input_log.txt", "w", encoding="utf-8") as f:
+                            f.write(content_to_analyze)
+                    except: pass
+
+                    print(f"🤔 Checking ({source}): {content_to_analyze[:40]}...")
+
+                    prompt = (
+                        f"User Persona: {config.USER_PERSONA}\n"
+                        f"Current Focus: {config.USER_CURRENT_FOCUS}\n"
+                        f"Video Title: {content_to_analyze}\n\n"
+                        "TASK: Classify this video content.\n"
+                        "1. RELEVANT: Educational, Coding, Math, Science, Tech News, Tutorials.\n"
+                        "2. DISTRACTION: Movies, Gaming, Music Videos, Vlogs, Pranks, Entertainment.\n"
+                        "Reply ONLY with the word 'RELEVANT' or 'DISTRACTION'."
+                    )
+
+                    response = await qwen_llm.acomplete(prompt)
+                    verdict = response.text.strip().upper()
+                    print(f"🤖 Verdict: {verdict}")
+
+                    if "DISTRACTION" in verdict:
+                        print(f"🚨 Distraction Found!")
+                        await punish(tools)
+                    else:
+                        print("✅ Safe.")
+
+            await asyncio.sleep(10)
+
+        except Exception as e:
+            print(f"❌ Error: {e}")
+            await asyncio.sleep(5)
+
+async def punish(tools):
+    print("💥 PUNISHMENT EXECUTED!")
+    await tools.press_key(3) 
 
 if __name__ == "__main__":
     asyncio.run(main())
