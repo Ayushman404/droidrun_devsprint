@@ -3,7 +3,7 @@
 # --- 1. IDENTITY (The Persona) ---
 # Your dashboard can update these strings to change the "Brain" instantly.
 USER_PERSONA = "Computer Science Engineering Student"
-USER_CURRENT_FOCUS = "Data Structures, Algorithms, System Design, and Python"
+USER_CURRENT_FOCUS = "Data Structures, Algorithms, System Design, Math, and Python"
 
 # --- 2. STRICTNESS SETTINGS ---
 # Set to False to allow general entertainment (Movies, Games).
@@ -11,7 +11,7 @@ USER_CURRENT_FOCUS = "Data Structures, Algorithms, System Design, and Python"
 STUDY_MODE = True 
 
 # How many seconds to wait after opening a new app before checking?
-GRACE_PERIOD = 15 
+GRACE_PERIOD = 5
 
 # Anti-Cheat: If you reopen a banned app within X seconds, no grace period.
 REOPEN_PENALTY_TIME = 200

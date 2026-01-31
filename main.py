@@ -6,7 +6,6 @@ import utils
 from droidrun import AdbTools
 from llama_index.llms.ollama import Ollama
 
-# Fake Keys
 os.environ["GOOGLE_API_KEY"] = "fake"
 os.environ["OPENAI_API_KEY"] = "fake"
 
@@ -15,152 +14,177 @@ app_history = {}
 current_app_start_time = 0
 last_package = ""
 
+# --- CACHE ---
+last_screen_content_hash = "" 
+last_verdict = "SAFE"         
+
 # --- LANDSCAPE STATE ---
-was_landscape = False
-landscape_checked = False # Ensures we only tap once per session
+landscape_checked = False 
 
 async def main():
     global app_history, current_app_start_time, last_package 
-    global was_landscape, landscape_checked
+    global landscape_checked, last_screen_content_hash, last_verdict
     
-    print(f"🔥 TAP & SNAP ENFORCER | Persona: {config.USER_PERSONA}")
+    print(f"⚡ HIGH-PERFORMANCE ENFORCER | Persona: {config.USER_PERSONA}")
     print("------------------------------------------------")
 
     qwen_llm = Ollama(model="qwen2.5", request_timeout=30.0, base_url="http://localhost:11434")
     tools = AdbTools()
 
+    loop_delay = 2.0 
+
     while True:
         try:
-            # 1. GET DATA
+            # 1. GET RAW STATE
             raw_state = await tools.get_state()
             package, app_name = utils.get_app_info(raw_state)
             
-            # --- A. WHITELIST ---
-            if package in config.WHITELIST_APPS or "launcher" in package:
-                if last_package and last_package not in config.WHITELIST_APPS:
-                    app_history[last_package] = time.time()
-                last_package = package
-                was_landscape = False # Reset landscape memory
-                landscape_checked = False
-                await asyncio.sleep(5)
-                continue
-
-            # --- B. GRACE PERIOD ---
+            # =======================================================
+            # 🛑 APP SWITCH & HISTORY TRACKER
+            # =======================================================
             if package != last_package:
                 print(f"👉 Opened: {app_name}")
-                landscape_checked = False # Reset checking logic
-                last_closed = app_history.get(package, 0)
-                if (time.time() - last_closed) < config.REOPEN_PENALTY_TIME:
-                    print(f"🚫 ANTI-CHEAT: Instant Check.")
-                    current_app_start_time = 0 
-                else:
-                    current_app_start_time = time.time()
+                
+                # 1. Record when we LEFT the previous app
+                if last_package:
+                    app_history[last_package] = time.time()
+                
+                # 2. Reset Session
+                landscape_checked = False 
+                last_screen_content_hash = "" 
+                last_verdict = "SAFE"
+                current_app_start_time = time.time() # Default reset
+                
+                # 3. ANTI-CHEAT (Only for Non-Whitelist Apps)
+                # FIX: Don't punish user for opening Home Screen "too fast"
+                is_whitelisted = package in config.WHITELIST_APPS or "launcher" in package
+                
+                if not is_whitelisted:
+                    last_closed = app_history.get(package, 0)
+                    time_since_closed = time.time() - last_closed
+                    
+                    if time_since_closed < config.REOPEN_PENALTY_TIME:
+                        print(f"🚫 ANTI-CHEAT: Reopened in {int(time_since_closed)}s. Instant Check.")
+                        current_app_start_time = 0 
+                
                 last_package = package
 
+            # =======================================================
+            # A. WHITELIST CHECK (Home Screen Immunity)
+            # =======================================================
+            if package in config.WHITELIST_APPS or "launcher" in package:
+                loop_delay = 3.0 
+                await asyncio.sleep(loop_delay)
+                continue
+
+            # =======================================================
+            # B. GRACE PERIOD
+            # =======================================================
             if (time.time() - current_app_start_time) < config.GRACE_PERIOD:
-                await asyncio.sleep(5)
+                await asyncio.sleep(1.0) 
                 continue
 
-            # 2. EXTRACTION
-            text_list = utils.extract_all_text(raw_state)
-            is_currently_landscape = utils.is_landscape(raw_state)
+            # =======================================================
+            # C. SINGLE-PASS EXTRACTION
+            # =======================================================
+            text_list, is_currently_landscape = utils.process_state(raw_state)
 
-            # 3. TECHNICAL CHECKS
-            if "instagram" in package and not utils.is_insta_safe(text_list):
-                print("🚨 RULE BROKEN: Insta Feed/Reels.")
-                await punish(tools)
-                continue
-
+            # =======================================================
+            # D. FAST LANE (Technical Checks)
+            # =======================================================
+            
             if "youtube" in package:
-                safe, reason, is_shorts = utils.is_youtube_safe(text_list, state=raw_state)
+                loop_delay = 0.5 
+                safe, reason, is_shorts = utils.is_youtube_safe(text_list)
                 if is_shorts:
-                    print(f"🚨 Shorts Detected: {reason}")
+                    print(f"🚨 INSTANT KILL: {reason}")
                     await punish(tools)
+                    continue 
+            else:
+                loop_delay = 2.0 
+
+            if "instagram" in package:
+                if not utils.is_insta_safe(text_list):
+                    print("🚨 INSTANT KILL: Insta Feed/Reels.")
+                    await punish(tools)
+                    continue 
+
+            # =======================================================
+            # E. SMART LANE (Hash & LLM)
+            # =======================================================
+            
+            # Hash Check
+            current_content_str = "".join(text_list)
+            if current_content_str == last_screen_content_hash:
+                if "DISTRACTION" in last_verdict:
+                    await punish(tools)
+                await asyncio.sleep(loop_delay) 
+                continue
+            
+            last_screen_content_hash = current_content_str
+
+            # LLM Check
+            if config.STUDY_MODE and "youtube" in package:
+                
+                content_to_analyze = ""
+                source = ""
+
+                # Landscape Tap
+                if is_currently_landscape and not landscape_checked:
+                    print("👀 Landscape Switch. Tapping...")
+                    await tools.swipe(1200, 500, 1200, 500, 50) 
+                    await asyncio.sleep(1.5) 
+                    
+                    new_state = await tools.get_state()
+                    new_texts, _ = utils.process_state(new_state)
+                    content_to_analyze = utils.clean_for_llm(new_texts)
+                    
+                    source = "Landscape Tap"
+                    landscape_checked = True 
+                    last_screen_content_hash = "".join(new_texts)
+
+                # Portrait
+                elif not is_currently_landscape:
+                    content_to_analyze = utils.clean_for_llm(text_list)
+                    source = "Portrait Mode"
+                    landscape_checked = False 
+                
+                else:
+                    await asyncio.sleep(loop_delay)
                     continue
 
-                # 4. LANDSCAPE TAP & SNAP LOGIC
-                if config.STUDY_MODE:
-                    
-                    content_to_analyze = ""
-                    source = ""
+                if len(content_to_analyze) < 10:
+                    continue
 
-                    # CASE A: Just entered Landscape (or need to re-check)
-                    if is_currently_landscape and not landscape_checked:
-                        print("👀 Landscape Detected. Tapping to reveal title...")
-                        
-                        # TAP THE SCREEN (Center-ish coordinates)
-                        # Assuming 1080x2400 resolution roughly. 
-                        # In landscape, center is approx X=1200, Y=500
-                        await tools.swipe(1200, 500, 1200, 500, 50) 
-                        
-                        # WAIT for UI to fade in
-                        await asyncio.sleep(1.5) 
-                        
-                        # RE-CAPTURE STATE (Now with title visible)
-                        new_state = await tools.get_state()
-                        new_text_list = utils.extract_all_text(new_state)
-                        
-                        # CLEAN DATA
-                        cleaned_text = utils.clean_for_llm(new_text_list)
-                        content_to_analyze = cleaned_text
-                        source = "Landscape Tap"
-                        landscape_checked = True # Mark done so we don't tap again
-                        
-                    # CASE B: Portrait Mode (Text is always visible)
-                    elif not is_currently_landscape:
-                        content_to_analyze = utils.clean_for_llm(text_list)
-                        source = "Portrait Mode"
-                        landscape_checked = False # Reset if we go back to portrait
-                    
-                    # CASE C: Already checked Landscape
-                    else:
-                        # We are in landscape, and we already checked it.
-                        # Do nothing to save battery/annoyance.
-                        await asyncio.sleep(5)
-                        continue
+                print(f"🤔 Checking ({source}): {content_to_analyze[:40]}...")
 
-                    # --- VERDICT PHASE ---
-                    # If we have content (from Tap or Portrait), verify it
-                    if len(content_to_analyze) < 10:
-                        print("⚠️ No readable text found. Skipping.")
-                        continue
+                prompt = (
+                    f"User: {config.USER_PERSONA}\n"
+                    f"Focus: {config.USER_CURRENT_FOCUS}\n"
+                    f"Title: {content_to_analyze}\n"
+                    "Ignore content that seems like advertisements.\n"
+                    "Classify as RELEVANT or DISTRACTION. Reply one word."
+                )
+                print(prompt)
 
-                    # Log what we are sending
-                    try:
-                        with open("llm_input_log.txt", "w", encoding="utf-8") as f:
-                            f.write(content_to_analyze)
-                    except: pass
+                response = await qwen_llm.acomplete(prompt)
+                verdict = response.text.strip().upper()
+                last_verdict = verdict 
+                
+                print(f"🤖 Verdict: {verdict}")
 
-                    print(f"🤔 Checking ({source}): {content_to_analyze[:40]}...")
+                if "DISTRACTION" in verdict:
+                    print(f"🚨 Distraction Found!")
+                    await punish(tools)
 
-                    prompt = (
-                        f"User Persona: {config.USER_PERSONA}\n"
-                        f"Current Focus: {config.USER_CURRENT_FOCUS}\n"
-                        f"Video Title: {content_to_analyze}\n\n"
-                        "TASK: Classify this video content.\n"
-                        "1. RELEVANT: Educational, Coding, Math, Science, Tech News, Tutorials.\n"
-                        "2. DISTRACTION: Movies, Gaming, Music Videos, Vlogs, Pranks, Entertainment.\n"
-                        "Reply ONLY with the word 'RELEVANT' or 'DISTRACTION'."
-                    )
-
-                    response = await qwen_llm.acomplete(prompt)
-                    verdict = response.text.strip().upper()
-                    print(f"🤖 Verdict: {verdict}")
-
-                    if "DISTRACTION" in verdict:
-                        print(f"🚨 Distraction Found!")
-                        await punish(tools)
-                    else:
-                        print("✅ Safe.")
-
-            await asyncio.sleep(10)
+            await asyncio.sleep(loop_delay)
 
         except Exception as e:
             print(f"❌ Error: {e}")
             await asyncio.sleep(5)
 
 async def punish(tools):
-    print("💥 PUNISHMENT EXECUTED!")
+    print("💥 PUNISHMENT!")
     await tools.press_key(3) 
 
 if __name__ == "__main__":
