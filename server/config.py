@@ -19,6 +19,15 @@ PENALTY_DURATION = 60
 PUNISHMENT_TYPE = "HOME" # Options: "HOME", "BACK", "OPEN_APP"
 PUNISHMENT_TARGET = ""   # e.g., "com.duolingo" if OPEN_APP is selected
 
+
+# --- MANUAL PREFERENCES (Your Saved Toggles) ---
+# These store what you set on the dashboard
+MANUAL_STUDY_MODE = False
+MANUAL_DOOMSCROLL_MODE = True
+MANUAL_PUNISHMENT_TYPE = "HOME"
+MANUAL_PUNISHMENT_TARGET = ""
+
+
 # --- IGNORED APPS ---
 # These are skipped by the loop entirely (Launchers, System UI, etc.)
 WHITELIST_APPS = [

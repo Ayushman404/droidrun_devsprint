@@ -1,16 +1,19 @@
 import asyncio
 import uvicorn
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy import select, update
 from pydantic import BaseModel
+from datetime import datetime, time
 
 import config
 import main
 import state_manager
-from database import init_db, AsyncSessionLocal, AppConfig, DailyUsage
+from database import init_db, AsyncSessionLocal, AppConfig, DailyUsage, ScheduleRule
 from droidrun import AdbTools
+from agent_service import agent_router
+from scheduler_service import sync_schedule_to_config 
 
 app = FastAPI()
 
@@ -22,7 +25,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- GLOBAL TASK REFERENCE (To kill it later) ---
+app.include_router(agent_router, prefix="/agent")
+
+# --- GLOBAL TASK REFERENCE ---
 sync_task = None
 
 # --- BACKGROUND TASKS ---
@@ -36,7 +41,6 @@ async def periodic_db_sync():
                 await state_manager.sync_usage_to_db()
     except asyncio.CancelledError:
         print("🛑 Sync Task Cancelled. Shutting down...")
-        # Force one last save before dying
         await state_manager.sync_usage_to_db()
 
 @app.on_event("startup")
@@ -65,12 +69,13 @@ async def startup_event():
     # 3. Load RAM
     await state_manager.load_config_to_ram()
     
-    # 4. Start Sync Task & Keep Reference
+    # 4. Start Tasks
     sync_task = asyncio.create_task(periodic_db_sync())
+    # Start the Scheduler Loop (Priority Logic)
+    asyncio.create_task(sync_schedule_to_config())
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Cleanly kill the background task"""
     print("🔻 Server shutting down...")
     if sync_task:
         sync_task.cancel()
@@ -82,10 +87,6 @@ async def shutdown_event():
 
 # --- API ENDPOINTS ---
 
-# Add to server.py
-
-# In server.py, replace the @app.get("/analytics") endpoint with this:
-
 @app.get("/analytics")
 def get_analytics():
     """Reads LIVE metrics directly from RAM (Instant Updates)"""
@@ -93,11 +94,9 @@ def get_analytics():
     total_strikes = 0
     app_breakdown = []
     
-    # 1. Identify all unique apps active today (from both Time and Strikes caches)
     all_packages = set(state_manager.USAGE_CACHE.keys()) | set(state_manager.STRIKES_CACHE.keys())
     
     for pkg in all_packages:
-        # Get values (default to 0 if missing)
         seconds = state_manager.USAGE_CACHE.get(pkg, 0)
         strikes = state_manager.STRIKES_CACHE.get(pkg, 0)
         
@@ -105,26 +104,18 @@ def get_analytics():
         total_time += mins
         total_strikes += strikes
         
-        # Get Friendly Name
         friendly_name = pkg
         if pkg in state_manager.CONFIG_CACHE:
-             # Try to find a name, or clean up the package string
-             # We rely on the frontend to map package -> name if needed, 
-             # but here is a simple fallback:
              friendly_name = pkg.split('.')[-1].capitalize()
-             
-             # If you have the full app list in memory, you could map it better,
-             # but this is usually sufficient for the chart.
 
         if mins > 0 or strikes > 0:
             app_breakdown.append({
                 "name": friendly_name, 
-                "package": pkg, # Send package so frontend can match names
+                "package": pkg,
                 "value": mins,
                 "strikes": strikes
             })
             
-    # Sort by Time Used (Descending)
     app_breakdown = sorted(app_breakdown, key=lambda x: x['value'], reverse=True)[:5]
     
     return {
@@ -165,30 +156,51 @@ def get_config():
         "doomscroll_mode": config.DOOMSCROLL_MODE,
         "grace_period": config.GRACE_PERIOD,
         "max_strikes": config.MAX_STRIKES,
-        "penalty_duration": getattr(config, "PENALTY_DURATION", 60), # Safety default
+        "penalty_duration": getattr(config, "PENALTY_DURATION", 60),
         "punishment_type": getattr(config, "PUNISHMENT_TYPE", "HOME"),
         "punishment_target": getattr(config, "PUNISHMENT_TARGET", "")
     }
 
+# --- 🔥 UPDATED ENDPOINT (The Priority Logic Fix) ---
 @app.post("/config")
 def update_config(data: dict):
-    config.USER_PERSONA = data.get("persona", config.USER_PERSONA)
-    config.USER_CURRENT_FOCUS = data.get("focus", config.USER_CURRENT_FOCUS)
-    config.STUDY_MODE = data.get("study_mode", config.STUDY_MODE)
-    config.DOOMSCROLL_MODE = data.get("doomscroll_mode", config.DOOMSCROLL_MODE)
-    config.GRACE_PERIOD = int(data.get("grace_period", config.GRACE_PERIOD))
-    config.MAX_STRIKES = int(data.get("max_strikes", config.MAX_STRIKES))
+    """
+    Updates the Runtime Config AND the Manual Preference Memory.
+    This ensures that when a Schedule ends, we revert to these 'Manual' settings.
+    """
+    # 1. Update Basic Settings
+    if "persona" in data: config.USER_PERSONA = data["persona"]
+    if "grace_period" in data: config.GRACE_PERIOD = int(data["grace_period"])
+    if "max_strikes" in data: config.MAX_STRIKES = int(data["max_strikes"])
     
-    # NEW FIELDS
-    config.PENALTY_DURATION = int(data.get("penalty_duration", config.PENALTY_DURATION))
-    config.PUNISHMENT_TYPE = data.get("punishment_type", config.PUNISHMENT_TYPE)
-    config.PUNISHMENT_TARGET = data.get("punishment_target", config.PUNISHMENT_TARGET)
-    
-    if config.STUDY_MODE:
-        config.DOOMSCROLL_MODE = True
+    # 2. Update Toggles (Both Active & Manual Memory)
+    if "study_mode" in data:
+        config.MANUAL_STUDY_MODE = data["study_mode"]
+        config.STUDY_MODE = data["study_mode"] # Instant Apply
         
-    print(f"🔧 CONFIG UPDATED: Penalty={config.PENALTY_DURATION}s | Type={config.PUNISHMENT_TYPE}")
+    if "doomscroll_mode" in data:
+        config.MANUAL_DOOMSCROLL_MODE = data["doomscroll_mode"]
+        config.DOOMSCROLL_MODE = data["doomscroll_mode"]
+        
+    if "punishment_type" in data:
+        config.MANUAL_PUNISHMENT_TYPE = data["punishment_type"]
+        config.PUNISHMENT_TYPE = data["punishment_type"]
+        
+    if "punishment_target" in data:
+        config.MANUAL_PUNISHMENT_TARGET = data["punishment_target"]
+        config.PUNISHMENT_TARGET = data["punishment_target"]
+        
+    if "focus" in data:
+        # If user manually sets focus, we tag it as MANUAL so scheduler knows
+        config.USER_CURRENT_FOCUS = data["focus"]
+
+    # 3. New Penalty Duration
+    if "penalty_duration" in data:
+        config.PENALTY_DURATION = int(data["penalty_duration"])
+
+    print(f"🔧 MANUAL CONFIG UPDATE: Study={config.STUDY_MODE} | Doom={config.DOOMSCROLL_MODE}")
     return {"status": "Updated", "config": get_config()}
+
 
 # --- APP DATA ---
 class AppUpdate(BaseModel):
@@ -233,6 +245,55 @@ async def update_app_rule(package: str, rule: AppUpdate):
         "blocked": rule.blocked
     }
     return {"status": "success", "package": package}
+
+# --- SCHEDULE API ---
+class ScheduleRequest(BaseModel):
+    start: str 
+    end: str   
+    label: str
+    study_mode: bool
+    doomscroll_mode: bool
+    punishment_type: str
+    punishment_target: str = ""
+
+@app.get("/schedule")
+async def get_schedule():
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(ScheduleRule).order_by(ScheduleRule.start_time))
+        rules = result.scalars().all()
+        return rules
+
+@app.post("/schedule")
+async def add_schedule(req: ScheduleRequest):
+    try:
+        start_t = datetime.strptime(req.start, "%H:%M").time()
+        end_t = datetime.strptime(req.end, "%H:%M").time()
+        
+        async with AsyncSessionLocal() as session:
+            new_rule = ScheduleRule(
+                start_time=start_t,
+                end_time=end_t,
+                label=req.label,
+                study_mode=req.study_mode,
+                doomscroll_mode=req.doomscroll_mode,
+                punishment_type=req.punishment_type,
+                punishment_target=req.punishment_target
+            )
+            session.add(new_rule)
+            await session.commit()
+        return {"status": "added"}
+    except Exception as e:
+        print(f"❌ Schedule Add Failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/schedule/{id}")
+async def delete_schedule(id: int):
+    async with AsyncSessionLocal() as session:
+        rule = await session.get(ScheduleRule, id)
+        if rule:
+            await session.delete(rule)
+            await session.commit()
+    return {"status": "deleted"}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

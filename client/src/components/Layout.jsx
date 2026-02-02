@@ -1,5 +1,5 @@
 import { Link, useLocation } from "react-router-dom";
-import { ShieldAlert, Activity, Grid, Settings, PieChart, LayoutDashboard } from "lucide-react";
+import { ShieldAlert, Activity, Grid, Settings, PieChart, LayoutDashboard, Calendar } from "lucide-react";
 
 export default function Layout({ children }) {
   const { pathname } = useLocation();
@@ -35,6 +35,7 @@ export default function Layout({ children }) {
             <NavItem to="/apps" icon={Grid} label="APP RULES" />
             <NavItem to="/analytics" icon={PieChart} label="ANALYTICS" /> {/* New Link */}
             <NavItem to="/settings" icon={Settings} label="SYSTEM" />
+            <NavItem to="/schedule" icon={Calendar} label="Autopilot" />
         </nav>
 
         <div className="p-4 border-t border-gray-800">

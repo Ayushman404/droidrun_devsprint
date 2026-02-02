@@ -4,7 +4,7 @@
 
 The Android Enforcer is an external supervision system that transforms a PC into a ruthless productivity governor for an Android device. Unlike on-device app blockers that can be uninstalled or bypassed, this system operates via **ADB (Android Debug Bridge)**, making it immune to standard evasion tactics.
 
-It combines **Optical Character Recognition (OCR)**, **Stateful Persistence (SQLite)**, and **Generative AI (Qwen 2.5)** to analyze screen content in real-time, enforcing strict protocols with zero-latency intervention.
+It combines **Stateful Persistence (SQLite)**, and **Generative AI (Qwen 2.5)** to analyze screen content in real-time, enforcing strict protocols with zero-latency intervention.
 
 
 

@@ -1,6 +1,6 @@
 import asyncio
 from datetime import date
-from sqlalchemy import Column, Integer, String, Boolean, Date, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Boolean, Date, UniqueConstraint, Time
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
 
@@ -32,6 +32,20 @@ class DailyUsage(Base):
     strikes = Column(Integer, default=0)  # <--- NEW COLUMN ADDED HERE
     
     __table_args__ = (UniqueConstraint('package_name', 'usage_date', name='_pkg_date_uc'),)
+    
+
+class ScheduleRule(Base):
+    __tablename__ = "schedule_rules"
+    id = Column(Integer, primary_key=True, index=True)
+    start_time = Column(Time, nullable=False) # e.g., 09:00:00
+    end_time = Column(Time, nullable=False)   # e.g., 17:00:00
+    label = Column(String)                    # "Deep Work"
+    
+    # The Configs to Enforce
+    study_mode = Column(Boolean, default=False)
+    doomscroll_mode = Column(Boolean, default=True)
+    punishment_type = Column(String, default="HOME")
+    punishment_target = Column(String, default="")
 
 # --- INITIALIZATION ---
 

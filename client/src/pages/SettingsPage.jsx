@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { Save, Sliders, Zap, Brain, Shield, AlertTriangle, Flame, Gavel } from "lucide-react";
+import AppSelector from "../components/AppSelector";
 import * as api from "../api";
 
 export default function SettingsPage() {
@@ -154,17 +155,21 @@ export default function SettingsPage() {
             </div>
 
             {config.punishment_type === "OPEN_APP" && (
-                <div className="animate-in fade-in slide-in-from-top-2 duration-300">
-                    <label className="block text-xs text-gray-500 mb-1">TARGET PACKAGE (e.g., com.duolingo)</label>
-                    <input
-                        type="text"
-                        placeholder="com.package.name"
-                        value={config.punishment_target}
-                        onChange={(e) => setConfig({ ...config, punishment_target: e.target.value })}
-                        className="w-full bg-black border border-red-500/50 rounded px-3 py-2 text-gray-200 focus:border-red-500 focus:outline-none"
-                    />
-                </div>
-            )}
+            <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+                <label className="block text-xs text-gray-500 mb-1">TARGET PACKAGE</label>
+                <AppSelector
+                    value={config.punishment_target}
+                    onChange={(val) => setConfig({ ...config, punishment_target: val })}
+                    placeholder="Select Punishment App"
+                />
+                {/* Fallback Text: Shows the raw package name if selected, just for verification */}
+                {config.punishment_target && (
+                    <div className="text-[10px] text-gray-600 mt-1 font-mono">
+                        Selected: {config.punishment_target}
+                    </div>
+                )}
+            </div>
+        )}
         </div>
       </section>
 

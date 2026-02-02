@@ -1,19 +1,23 @@
 import { useState, useEffect, useRef } from "react";
 import { Play, Square, Activity, Terminal } from "lucide-react";
 import * as api from "../api";
+import AgentConsole from "../components/AgentConsole";
 
 export default function Dashboard() {
   const [status, setStatus] = useState({ running: false, current_app: "...", last_verdict: "...", logs: [] });
-  const logsEndRef = useRef(null);
+  // Ref now points to the container, not a dummy div
+  const logsContainerRef = useRef(null);
 
   useEffect(() => {
     const interval = setInterval(fetchStatus, 1000);
     return () => clearInterval(interval);
   }, []);
 
-  // Auto-scroll logs
+  // Auto-scroll ONLY the container when logs update
   useEffect(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (logsContainerRef.current) {
+      logsContainerRef.current.scrollTop = logsContainerRef.current.scrollHeight;
+    }
   }, [status.logs]);
 
   const fetchStatus = async () => {
@@ -61,13 +65,20 @@ export default function Dashboard() {
         </div>
       </div>
 
+      <AgentConsole />
+
       {/* Terminal Logs */}
       <div className="bg-[#0a0a0a] border border-gray-800 rounded-lg overflow-hidden flex flex-col h-[500px]">
         <div className="bg-[#121212] px-4 py-2 border-b border-gray-800 flex items-center gap-2">
           <Terminal size={16} className="text-gray-500" />
           <span className="text-xs text-gray-500 font-mono">SYSTEM_LOGS</span>
         </div>
-        <div className="flex-1 p-4 overflow-y-auto font-mono text-sm space-y-1">
+        
+        {/* Attached Ref here directly to the scrollable container */}
+        <div 
+            ref={logsContainerRef}
+            className="flex-1 p-4 overflow-y-auto font-mono text-sm space-y-1"
+        >
           {status.logs.map((log, i) => (
             <div key={i} className="flex gap-3">
               <span className="text-gray-600">[{new Date().toLocaleTimeString()}]</span>
@@ -76,7 +87,6 @@ export default function Dashboard() {
               </span>
             </div>
           ))}
-          <div ref={logsEndRef} />
         </div>
       </div>
     </div>
