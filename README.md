@@ -39,17 +39,7 @@ The system is built on a **FastAPI** backend and a **React (Vite)** frontend, em
 
 ### Phase 1: Dependencies
 
-Create a file named `requirements.txt` in the root directory and paste the following:
-
-```text
-fastapi>=0.109.0
-uvicorn[standard]>=0.27.0
-sqlalchemy>=2.0.0
-aiosqlite>=0.19.0
-pydantic>=2.0.0
-llama-index-llms-ollama>=0.1.0
-llama-index-core>=0.10.0
-droidrun>=0.1.0  # Ensure the DroidRun wrapper is installed
+Use a file named `requirements.txt` 
 
 
 
@@ -61,6 +51,7 @@ pip install droidrun
 
 # 2. Install Project Dependencies
 pip install -r requirements.txt
+```
 
 Phase 2: Backend Setup
 The backend initializes the SQLite database automatically on the first run.
