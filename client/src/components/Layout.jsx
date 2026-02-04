@@ -27,7 +27,7 @@ export default function Layout({ children }) {
       <aside className="w-64 border-r border-gray-800 flex flex-col fixed h-full bg-[#050505] z-10">
         <div className="h-16 flex items-center px-6 border-b border-gray-800">
           <ShieldAlert className="text-cyan-400 mr-3" />
-          <span className="font-bold text-lg tracking-widest text-white">ENFORCER_</span>
+          <span className="font-bold text-lg tracking-widest text-white">PARENTAL DASHBOARD</span>
         </div>
         
         <nav className="flex-1 py-6 space-y-2 pr-4">
